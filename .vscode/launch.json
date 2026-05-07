@@ -1,0 +1,18 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run Budget System",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/budget",
+      "args": [],
+      "stopAtEntry": false,
+      "cwd": "${workspaceFolder}",
+      "environment": [],
+      "externalConsole": false,
+      "MIMode": "lldb",
+      "preLaunchTask": "build budget with make"
+    }
+  ]
+}
