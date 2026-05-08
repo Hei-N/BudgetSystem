@@ -3,7 +3,10 @@
 #include <iostream>
 #include <iomanip>
 #include <sstream>
+#include <fstream>
+#include <vector>
 #include <cmath>
+#include <sys/stat.h>
 
 BudgetManager::BudgetManager()
     : nextExpenseId(1), nextIncomeId(1), nextBillId(1)
@@ -354,4 +357,184 @@ bool BudgetManager::getCategorySnapshot(const std::string& category,
     spent   = cb->spent;
     percent = (cb->budget > 0.0) ? (cb->spent / cb->budget * 100.0) : 0.0;
     return true;
+}
+
+// =================================================================
+// GUI helper methods
+// =================================================================
+
+std::vector<Category> BudgetManager::getAllCategories() const {
+    std::vector<Category> result;
+    result.reserve(allowedCategories.size());
+    for (const std::string& name : allowedCategories) {
+        const CategoryBudget* cb = categoryMap.get(name);
+        if (cb) result.emplace_back(name, cb->budget, cb->spent);
+        else    result.emplace_back(name, 0.0, 0.0);
+    }
+    return result;
+}
+
+std::vector<Expense> BudgetManager::getExpensesAll() const {
+    std::vector<Expense> result;
+    expenses.forEach([&](const Expense& e){ result.push_back(e); });
+    return result;
+}
+
+std::vector<Income> BudgetManager::getIncomesAll() const {
+    std::vector<Income> result;
+    incomes.forEach([&](const Income& i){ result.push_back(i); });
+    return result;
+}
+
+std::vector<Bill> BudgetManager::getBillsAll() const {
+    std::vector<Bill> result;
+    bills.forEach([&](const Bill& b){ result.push_back(b); });
+    return result;
+}
+
+double BudgetManager::getTotalIncome() const {
+    double total = 0.0;
+    incomes.forEach([&](const Income& i){ total += i.getAmount(); });
+    return total;
+}
+
+// =================================================================
+// Persistence
+// =================================================================
+
+void BudgetManager::clear() {
+    expenses.clear();
+    incomes.clear();
+    bills.clear();
+    undoStack.clear();
+    expensesByDate.clear();
+    for (const std::string& c : allowedCategories)
+        categoryMap.set(c, CategoryBudget(0.0, 0.0));
+    nextExpenseId = nextIncomeId = nextBillId = 1;
+    refreshReminders();
+}
+
+void BudgetManager::saveToDir(const std::string& dir) const {
+    mkdir(dir.c_str(), 0755);
+
+    // expenses
+    {
+        std::ofstream f(dir + "/expenses.csv");
+        f << std::fixed << std::setprecision(2);
+        expenses.forEach([&](const Expense& e) {
+            f << e.getTransactionId() << "\t"
+              << e.getDate().toString()  << "\t"
+              << e.getAmount()           << "\t"
+              << e.getCategory()         << "\t"
+              << e.getDescription()      << "\t"
+              << e.getPaymentMethod()    << "\n";
+        });
+    }
+    // incomes
+    {
+        std::ofstream f(dir + "/incomes.csv");
+        f << std::fixed << std::setprecision(2);
+        incomes.forEach([&](const Income& i) {
+            f << i.getTransactionId() << "\t"
+              << i.getDate().toString()  << "\t"
+              << i.getAmount()           << "\t"
+              << i.getCategory()         << "\t"
+              << i.getDescription()      << "\t"
+              << i.getSource()           << "\n";
+        });
+    }
+    // bills
+    {
+        std::ofstream f(dir + "/bills.csv");
+        f << std::fixed << std::setprecision(2);
+        bills.forEach([&](const Bill& b) {
+            f << b.getBillId()            << "\t"
+              << b.getBillName()          << "\t"
+              << b.getAmount()            << "\t"
+              << b.getDueDate().toString()<< "\t"
+              << (b.getIsPaid() ? 1 : 0) << "\n";
+        });
+    }
+    // category budgets
+    {
+        std::ofstream f(dir + "/budgets.csv");
+        f << std::fixed << std::setprecision(2);
+        auto& m = const_cast<HashMap<CategoryBudget>&>(categoryMap);
+        m.forEach([&](const std::string& name, CategoryBudget& cb) {
+            f << name << "\t" << cb.budget << "\n";
+        });
+    }
+}
+
+void BudgetManager::loadFromDir(const std::string& dir) {
+    clear();
+
+    auto splitLine = [](const std::string& line, std::vector<std::string>& out) {
+        out.clear();
+        std::stringstream ss(line);
+        std::string tok;
+        while (std::getline(ss, tok, '\t')) out.push_back(tok);
+    };
+    std::vector<std::string> f;
+
+    // budgets first so spent values accumulate correctly
+    {
+        std::ifstream in(dir + "/budgets.csv");
+        std::string line;
+        while (std::getline(in, line)) {
+            splitLine(line, f);
+            if (f.size() < 2) continue;
+            if (isValidCategory(f[0])) setCategoryBudget(f[0], std::stod(f[1]));
+        }
+    }
+    // expenses
+    {
+        std::ifstream in(dir + "/expenses.csv");
+        std::string line;
+        while (std::getline(in, line)) {
+            splitLine(line, f);
+            if (f.size() < 6) continue;
+            int id = std::stoi(f[0]);
+            Date d; if (!Date::tryParse(f[1], d)) continue;
+            double amt = std::stod(f[2]);
+            Expense e(id, d, amt, f[3], f[4], f[5]);
+            expenses.pushBack(e);
+            expensesByDate.insert(d, id);
+            CategoryBudget* cb = categoryMap.get(f[3]);
+            if (cb) cb->spent += amt;
+            if (id >= nextExpenseId) nextExpenseId = id + 1;
+        }
+    }
+    // incomes
+    {
+        std::ifstream in(dir + "/incomes.csv");
+        std::string line;
+        while (std::getline(in, line)) {
+            splitLine(line, f);
+            if (f.size() < 6) continue;
+            int id = std::stoi(f[0]);
+            Date d; if (!Date::tryParse(f[1], d)) continue;
+            double amt = std::stod(f[2]);
+            Income i(id, d, amt, f[3], f[4], f[5]);
+            incomes.pushBack(i);
+            if (id >= nextIncomeId) nextIncomeId = id + 1;
+        }
+    }
+    // bills
+    {
+        std::ifstream in(dir + "/bills.csv");
+        std::string line;
+        while (std::getline(in, line)) {
+            splitLine(line, f);
+            if (f.size() < 5) continue;
+            int id = std::stoi(f[0]);
+            Date d; if (!Date::tryParse(f[3], d)) continue;
+            double amt = std::stod(f[2]);
+            bool paid = (f[4] == "1");
+            Bill b(id, f[1], amt, d, paid);
+            bills.pushBack(b);
+            if (id >= nextBillId) nextBillId = id + 1;
+        }
+    }
+    refreshReminders();
 }

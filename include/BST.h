@@ -76,6 +76,12 @@ public:
 
     int  size()    const { return count; }
     bool isEmpty() const { return root == nullptr; }
+
+    void clear() {
+        destroy(root);
+        root  = nullptr;
+        count = 0;
+    }
 };
 
 #endif

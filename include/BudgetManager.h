@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include "Category.h"
 #include "LinkedList.h"
 #include "Stack.h"
 #include "HashMap.h"
@@ -119,6 +120,18 @@ public:
     // Helper used by the assistant for "show my food budget".
     bool getCategorySnapshot(const std::string& category,
                              double& budget, double& spent, double& percent) const;
+
+    // ===== GUI helper methods =====
+    std::vector<Category> getAllCategories() const;
+    std::vector<Expense>  getExpensesAll()   const;
+    std::vector<Income>   getIncomesAll()    const;
+    std::vector<Bill>     getBillsAll()      const;
+    double getTotalIncome() const;
+
+    // ===== Persistence =====
+    void clear();
+    void saveToDir(const std::string& dir) const;
+    void loadFromDir(const std::string& dir);
 };
 
 #endif
